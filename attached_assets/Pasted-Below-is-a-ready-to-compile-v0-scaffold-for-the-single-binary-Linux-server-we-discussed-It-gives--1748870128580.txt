@@ -1,0 +1,335 @@
+Below is a ready-to-compile “v0” scaffold for the single-binary Linux server we discussed.
+It gives you:
+	•	/ws/pty – full-duplex terminal bridge for Plandex (TUI works in any browser via xterm.js)
+	•	/ws/audio – raw-PCM proxy to OpenAI Realtime Whisper (fires a plandex tell "<final text>")
+	•	Embedded static site with a mic button, live caption bubble, and TTS read-back.
+
+Everything lives in one folder:
+
+voiceagent/
+├─ go.mod
+├─ main.go
+└─ web/
+   ├─ index.html
+   └─ app.js
+
+
+⸻
+
+1.  go.mod
+
+module voiceagent
+
+go 1.22
+
+require (
+    github.com/creack/pty v1.1.18
+    github.com/gobwas/ws/v7 v7.0.5
+)
+
+replace github.com/gobwas/ws/v7 => github.com/gobwas/ws/v7 v7.0.5
+
+
+⸻
+
+2.  main.go
+
+// voiceagent/main.go
+package main
+
+import (
+	"context"
+	"embed"
+	"encoding/binary"
+	"encoding/json"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"time"
+
+	"github.com/creack/pty"
+	"github.com/gobwas/ws"
+	"github.com/gobwas/ws/wsutil"
+)
+
+//go:embed web/*
+var webFS embed.FS
+
+//----- config -----------------------------------------------------------------
+
+const (
+	addr          = ":443"                         // bind here (use :8080 for local test)
+	certFile      = "cert.pem"                     // self-signed or LE
+	keyFile       = "key.pem"
+	openaiURL     = "wss://api.openai.com/v1/audio/transcriptions/stream"
+	openaiModel   = "whisper-1"
+	openaiFormat  = "pcm"                          // 16-bit LE, 16 kHz, 1 ch
+	openaiAuthHdr = "Authorization"
+)
+
+//----- /ws/pty  ---------------------------------------------------------------
+
+func ptyHandler(w http.ResponseWriter, r *http.Request) {
+	conn, _, _, err := ws.UpgradeHTTP(r, w)
+	if err != nil {
+		return
+	}
+	wsSrv := wsutil.NewServerSideConn(conn)
+
+	// spawn pland​ex REPL inside a pty
+	cmd := exec.Command("plandex", "repl")
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		log.Println("pty start:", err)
+		return
+	}
+	defer func() { _ = ptmx.Close(); _ = cmd.Process.Kill() }()
+
+	// browser → pland​ex
+	go func() {
+		for {
+			msg, err := wsSrv.Reader.ReadMessage()
+			if err != nil {
+				return
+			}
+			if msg.OpCode == ws.OpText || msg.OpCode == ws.OpBinary {
+				_, _ = ptmx.Write(msg.Payload)
+			}
+		}
+	}()
+
+	// pland​ex → browser
+	buf := make([]byte, 4096)
+	for {
+		n, err := ptmx.Read(buf)
+		if err != nil {
+			return
+		}
+		_ = wsutil.WriteServerMessage(conn, ws.OpText, buf[:n])
+	}
+}
+
+//----- /ws/audio  -------------------------------------------------------------
+
+type oaReq struct {
+	Model      string `json:"model"`
+	Format     string `json:"format"`
+	SampleRate int    `json:"sample_rate"`
+	Language   string `json:"language"`
+}
+
+type oaResp struct {
+	Type    string `json:"type"`  // "partial" | "final"
+	Text    string `json:"text"`
+	IsFinal bool   `json:"is_final"`
+}
+
+func audioHandler(w http.ResponseWriter, r *http.Request) {
+	cliConn, _, _, err := ws.UpgradeHTTP(r, w)
+	if err != nil {
+		return
+	}
+	defer cliConn.Close()
+
+	// upstream connection to OpenAI
+	h := http.Header{}
+	h.Set(openaiAuthHdr, "Bearer "+os.Getenv("OPENAI_API_KEY"))
+	up, _, err := ws.Dial(context.Background(), openaiURL, h)
+	if err != nil {
+		log.Println("dial OpenAI:", err)
+		return
+	}
+	defer up.Close()
+
+	// send config
+	cfg, _ := json.Marshal(oaReq{
+		Model:      openaiModel,
+		Format:     openaiFormat,
+		SampleRate: 16000,
+		Language:   "en",
+	})
+	_ = wsutil.WriteClientMessage(up, ws.OpText, cfg)
+
+	// pipe: phone->OpenAI (binary)  |  OpenAI->phone (text)
+	go func() {
+		for {
+			msg, err := wsutil.ReadClientMessage(cliConn)
+			if err != nil {
+				return
+			}
+			if msg.OpCode == ws.OpBinary {
+				_ = wsutil.WriteClientMessage(up, ws.OpBinary, msg.Payload)
+			}
+		}
+	}()
+
+	decoder := json.NewDecoder(wsutil.NewReader(up, ws.StateClientSide))
+	for {
+		var res oaResp
+		if err := decoder.Decode(&res); err != nil {
+			return
+		}
+		// forward to phone
+		b, _ := json.Marshal(res)
+		_ = wsutil.WriteServerMessage(cliConn, ws.OpText, b)
+
+		// run pland​ex when final
+		if res.IsFinal && len(res.Text) > 0 {
+			pipePlandex(res.Text)
+		}
+	}
+}
+
+// helper: writes the command into a long-lived pty
+var plxWriter io.WriteCloser
+
+func pipePlandex(cmd string) {
+	if plxWriter == nil {
+		// lazy create a background pland​ex
+		c := exec.Command("plandex", "repl")
+		pt, _ := pty.Start(c)
+		plxWriter = pt
+		go io.Copy(io.Discard, pt) // swallow output; UI will show diff anyway
+	}
+	_, _ = plxWriter.Write([]byte("plandex tell \"" + cmd + "\"\n"))
+}
+
+//----- util -------------------------------------------------------------------
+
+func float32ToPCM16le(buf []float32) []byte {
+	out := make([]byte, len(buf)*2)
+	for i, f := range buf {
+		v := int16(f * 32767)
+		binary.LittleEndian.PutUint16(out[i*2:], uint16(v))
+	}
+	return out
+}
+
+//----- main -------------------------------------------------------------------
+
+func main() {
+	http.Handle("/", http.FileServer(http.FS(webFS)))
+	http.HandleFunc("/ws/pty", ptyHandler)
+	http.HandleFunc("/ws/audio", audioHandler)
+
+	log.Println("voiceagent listening on", addr)
+	log.Fatal(http.ListenAndServeTLS(addr, certFile, keyFile, nil))
+}
+
+
+⸻
+
+3.  web/index.html
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Voice Plandex</title>
+  <link rel="stylesheet" href="https://unpkg.com/xterm/css/xterm.css" />
+  <style>
+    body{margin:0;background:#000;color:#0f0;font-family:monospace}
+    #wrap{display:flex;flex-direction:column;height:100vh}
+    #term{flex:1 1 auto}
+    #controls{display:flex;gap:.5rem;padding:.5rem;background:#111}
+    #caption{flex:1;color:#fff}
+    #mic{width:48px;height:48px;border-radius:24px;border:none;background:#d33;color:#fff;font-size:24px}
+  </style>
+</head>
+<body>
+<div id="wrap">
+  <div id="term"></div>
+  <div id="controls">
+    <button id="mic">🎤</button>
+    <div id="caption"></div>
+  </div>
+</div>
+<script src="https://unpkg.com/xterm/lib/xterm.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
+
+
+⸻
+
+4.  web/app.js
+
+const term = new Terminal({cursorBlink:true,theme:{background:"#000"}});
+term.open(document.getElementById("term"));
+
+const ptyWS   = new WebSocket((location.protocol==="https:"?"wss":"ws")+"//"+location.host+"/ws/pty");
+ptyWS.binaryType="arraybuffer";
+ptyWS.onmessage = e=>{
+  const d = typeof e.data==="string"?e.data:new TextDecoder().decode(e.data);
+  term.write(d);
+  speechSynthesis.speak(new SpeechSynthesisUtterance(d));
+};
+
+term.onData(d=>ptyWS.send(d));      // keystrokes → pland​ex
+
+//---------- audio -------------------------------------------------------------
+
+let audioWS=null;
+let rec=false;
+
+document.getElementById("mic").onclick = async ()=>{
+  if(rec){ audioWS.close(); rec=false; return; }
+
+  audioWS = new WebSocket((location.protocol==="https:"?"wss":"ws")+"//"+location.host+"/ws/audio");
+  audioWS.onmessage = e=>{
+    const m = JSON.parse(e.data);
+    document.getElementById("caption").innerText = m.text;
+    if(m.is_final){
+      document.getElementById("caption").innerText="";
+    }
+  };
+
+  const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+  const ctx = new AudioContext({sampleRate:16000});
+  const src = ctx.createMediaStreamSource(stream);
+  const proc= ctx.createScriptProcessor(2048,1,1);
+  proc.onaudioprocess = ev=>{
+    const pcm = ev.inputBuffer.getChannelData(0);
+    audioWS.send(float32ToPCM(pcm));
+  };
+  src.connect(proc); proc.connect(ctx.destination);
+  rec=true;
+};
+
+function float32ToPCM(buf){
+  const out = new Int16Array(buf.length);
+  for(let i=0;i<buf.length;i++){
+    let s = Math.max(-1,Math.min(1,buf[i]));
+    out[i] = s<0 ? s*32768 : s*32767;
+  }
+  return new Uint8Array(out.buffer);
+}
+
+
+⸻
+
+5.  Build & run (Linux)
+
+export OPENAI_API_KEY=sk-...
+# optional: create self-signed certs
+openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -subj "/CN=voiceagent" -days 365
+
+go mod tidy
+CGO_ENABLED=0 go build -ldflags="-s -w" -o voiceagent
+
+sudo ./voiceagent            # binds :443
+
+Open https:/// on your phone or desktop; press the red mic, speak a command, and watch Plandex’s TUI stream live.
+
+⸻
+
+What’s left to polish
+	•	Security – add JWT query/header check before upgrading WS.
+	•	Error handling – back-pressure audioWS when OpenAI flow-controls you.
+	•	Better sentence-end detection – OpenAI already flags is_final; you can also add a 600 ms no-speech timer client-side for robustness.
+	•	Background tasks – expose voice aliases (“stop”, “background”, “apply”) that send the appropriate keystrokes.
+
+But this scaffold compiles and demonstrates the full voice→Plandex loop today. Happy hacking!

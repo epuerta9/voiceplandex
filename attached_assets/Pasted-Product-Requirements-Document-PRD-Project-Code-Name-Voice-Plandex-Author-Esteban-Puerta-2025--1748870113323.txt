@@ -1,0 +1,143 @@
+Product Requirements Document (PRD)
+
+Project Code-Name: Voice Plandex
+Author: Esteban Puerta ✦ 2025-05-31
+Revision: v0.9 (first complete draft)
+
+⸻
+
+1. Purpose & Vision
+
+Give developers a hands-free, anywhere way to converse with a powerful CLI coding agent running on their primary dev box. Using only a phone browser and a single Go binary on the laptop, they can:
+	•	Speak a coding request (“add a unit test for login flow”)
+	•	Hear Plandex’s streaming plan/diff read back aloud
+	•	Accept/stop/background the task with voice or taps
+
+Result: faster context switching, accessibility in “off-desk” moments (walking, commuting), fewer interruptions to flow.
+
+⸻
+
+2. Problem Statement
+
+Developers often leave the keyboard (stand-ups, couch, lab testing). Current chat-based agents require:
+	•	A GUI IDE (Cursor, GitHub Copilot Chat)
+	•	A second SSH session (typing on mobile is painful)
+	•	Proprietary SaaS IDE integration
+
+No solution lets them talk to a TUI-first power-agent like Plandex while still seeing the full VT100 interface.
+
+⸻
+
+3. Goals & Success Metrics
+
+Goal	KPI / Target
+Zero-install client	User joins by visiting https://; no native app required
+“Thought-to-agent” latency ≤ 2 s	90-percentile from end of speech → plan stream visible
+Natural interruption	Voice “stop” or Ctrl-C stops agent within < 300 ms
+Resilience	Audio dropouts < 100 ms cause no missed commands
+Security by default	TLS on by default, JWT required, port bound to Tailscale unless --insecure
+Lightweight	Binary ≤ 25 MB (CGO disabled)
+
+
+⸻
+
+4. Personas & User Stories
+
+Persona	Story
+Sofia – Senior SRE (Linux laptop)	“While walking between buildings, I remember a flaky test. I open the phone page, say ‘plandex tell stabilize flaky login test’, glance at the diff, say ‘apply changes’, and keep walking.”
+Adam – Accessibility-focused dev	“Typing long prompts hurts my wrists. I pin the site on my Android home screen and drive Plandex with voice throughout the day.”
+Jules – Product Engineer	“During a meeting I realise we need extra logging. I whisper a command; by the time I’m back at my desk, Plandex’s MR is ready.”
+
+
+⸻
+
+5. Functional Requirements
+
+5.1  Core Flows
+
+#	Requirement
+F-01	User loads https://<device> → sees xterm.js terminal + mic button.
+F-02	Pressing mic starts 16 kHz recording; a second tap or 600 ms silence ends phrase.
+F-03	Mobile sends raw PCM frames over /ws/audio; Go proxy forwards to OpenAI Realtime Whisper.
+F-04	On is_final == true, server injects plandex tell "<text>"\n into persistent Plandex pty.
+F-05	Plandex TUI appears live in terminal via /ws/pty.
+F-06	Server streams Plandex stdout both to terminal and phone’s speechSynthesis.
+F-07	Special voice keywords mapped to keystrokes: “stop” → Ctrl-C, “background” → b, “apply changes” → :apply\n.
+F-08	Manual keyboard input in xterm.js always works (fallback).
+
+5.2  Configuration & Deployment
+	•	Runs on Linux x86-64; single static Go binary voiceagent.
+	•	Flags: --addr, --tls-cert, --tls-key, --jwt-secret, --tailscale-only.
+	•	Embedded static files served from go:embed.
+	•	Requires plandex binary in $PATH.
+
+5.3  Security & Auth
+	•	Default bind: :443 but only on Tailscale interface.
+	•	JWT in Sec-WebSocket-Protocol header on both WS endpoints.
+	•	Optional --insecure for local LAN prototyping.
+	•	Idle-pty timer: kill if no WS connection for 5 min.
+
+⸻
+
+6. Non-Functional Requirements
+
+Category	Requirement
+Performance	Audio → final transcript average < 700 ms (OpenAI target).
+Scalability	One active user per laptop; extra connections share same pty.
+Accessibility	Colour palette passes WCAG AA; TTS enabled for all stdout chunks.
+Reliability	Auto-reconnect WebSockets; buffered stdout during reconnect.
+Maintainability	< 1 000 LoC Go; unit tests for pty bridge & STT proxy.
+Portability	No CGO when --cloud-stt; builds with CGO_ENABLED=0.
+
+
+⸻
+
+7. Out of Scope (v1)
+	•	On-device/offline Whisper model (adds CGO & GPU complexity).
+	•	Multi-user collaboration / shareable session IDs.
+	•	Non-Plandex agents (Aider etc.) – planned for v2 plug-in interface.
+	•	Mobile native wrapper; PWA is sufficient in v1.
+
+⸻
+
+8. Risks & Mitigations
+
+Risk	Probability	Impact	Mitigation
+OpenAI WS quota / rate-limit	Med	Commands blocked	Exponential back-off; display warning pill
+Browser mic permissions denied	Low	Voice unusable	Fallback to typing; show setup tooltip
+TUI escape-sequence glitches	Med	Broken UI	Comprehensive xterm.js testing; pin version
+Exposed shell over WS	Med	Critical	JWT + Tailscale ACL; optional per-command whitelist
+
+
+⸻
+
+9. Milestones & Timeline
+
+Week	Deliverable
+W-0	PRD approval & tech spike completed
+W-1	/ws/pty bridge + xterm UI stable
+W-2	/ws/audio proxy to OpenAI + caption bubble
+W-3	Voice→command debounce, interrupt keywords
+W-4	JWT, TLS, idle-kill, README docs
+W-5	Internal dog-food with CloudShip team
+W-6	Public alpha binaries & blog post
+
+
+⸻
+
+10. Acceptance Criteria (Go/No-Go)
+	•	End-to-end demo on Linux laptop + iPhone Safari passes all core flows.
+	•	90-percentile voice→diff latency ≤ 2 s (measured in dog-food tests).
+	•	Security review signs off on default Tailscale-only + JWT.
+	•	README gives one-line install & one-line run instructions.
+
+⸻
+
+11. Appendix – Open Questions
+	1.	Should we surface partial transcripts in the terminal itself or only in a floating caption?
+	2.	Do we want per-voice-command history for auditing (GDPR considerations)?
+	3.	How to internationalise beyond English (language param in Whisper)?
+
+⸻
+
+End of Document
