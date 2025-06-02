@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Plandex</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm/css/xterm.css">
+    <link rel="stylesheet" href="web/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎤</text></svg>">
+</head>
+<body>
+    <div id="app">
+        <header class="header">
+            <h1 class="header-title">
+                <span class="icon">🎤</span>
+                Voice Plandex
+            </h1>
+            <div class="header-status">
+                <span id="connection-status" class="status-indicator offline">Disconnected</span>
+                <span id="openai-status" class="status-indicator">OpenAI: Unknown</span>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <div id="terminal-container" class="terminal-container">
+                <div id="terminal"></div>
+            </div>
+            
+            <div class="controls-panel">
+                <div class="audio-controls">
+                    <button id="mic-button" class="mic-button" disabled>
+                        <span class="mic-icon">🎤</span>
+                        <span class="mic-text">Hold to Speak</span>
+                    </button>
+                    
+                    <div class="voice-commands">
+                        <span class="voice-commands-label">Voice Commands:</span>
+                        <div class="command-chips">
+                            <span class="command-chip">"stop"</span>
+                            <span class="command-chip">"apply changes"</span>
+                            <span class="command-chip">"background"</span>
+                            <span class="command-chip">"help"</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="caption-container" class="caption-container">
+                    <div id="caption" class="caption"></div>
+                </div>
+                
+                <div class="settings-toggle">
+                    <button id="settings-button" class="settings-button">⚙️ Settings</button>
+                </div>
+            </div>
+        </main>
+
+        <div id="settings-panel" class="settings-panel hidden">
+            <div class="settings-content">
+                <h3>Settings</h3>
+                
+                <div class="setting-group">
+                    <label for="tts-enabled">Enable Text-to-Speech</label>
+                    <input type="checkbox" id="tts-enabled" checked>
+                </div>
+                
+                <div class="setting-group">
+                    <label for="tts-rate">Speech Rate</label>
+                    <input type="range" id="tts-rate" min="0.5" max="2" step="0.1" value="1">
+                    <span id="tts-rate-value">1.0</span>
+                </div>
+                
+                <div class="setting-group">
+                    <label for="auto-apply">Auto-apply voice commands</label>
+                    <input type="checkbox" id="auto-apply" checked>
+                </div>
+                
+                <button id="close-settings" class="close-settings">Close</button>
+            </div>
+        </div>
+
+        <div id="error-panel" class="error-panel hidden">
+            <div class="error-content">
+                <span class="error-icon">⚠️</span>
+                <span id="error-message" class="error-message"></span>
+                <button id="close-error" class="close-error">×</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/xterm/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
+    <script src="web/app.js"></script>
+</body>
+</html>
