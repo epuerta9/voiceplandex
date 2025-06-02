@@ -654,13 +654,103 @@ body {
 
 /* Terminal Styling */
 .xterm-viewport {
-    background: hsl(var(--primary-bg)) !important;
+    background: transparent !important;
 }
 
 .xterm-screen {
-    background: hsl(var(--primary-bg)) !important;
+    background: transparent !important;
 }
 
 .xterm-cursor-layer {
     z-index: 1;
+}
+
+.xterm .xterm-viewport {
+    background-color: transparent !important;
+}
+
+.xterm .xterm-screen canvas {
+    background-color: transparent !important;
+}
+
+/* Loading Animation */
+@keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}
+
+.loading-shimmer {
+    position: relative;
+    overflow: hidden;
+}
+
+.loading-shimmer::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(
+        90deg,
+        transparent,
+        hsl(var(--accent-primary) / 0.1),
+        transparent
+    );
+    transform: translateX(-100%);
+    animation: shimmer 2s infinite;
+}
+
+/* Floating particles background effect */
+.main-content::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-image: 
+        radial-gradient(2px 2px at 20px 30px, hsl(var(--accent-primary) / 0.3), transparent),
+        radial-gradient(2px 2px at 40px 70px, hsl(var(--accent-secondary) / 0.2), transparent),
+        radial-gradient(1px 1px at 90px 40px, hsl(var(--accent-tertiary) / 0.3), transparent),
+        radial-gradient(1px 1px at 130px 80px, hsl(var(--accent-primary) / 0.2), transparent);
+    background-repeat: repeat;
+    background-size: 150px 100px;
+    animation: float 20s infinite linear;
+    opacity: 0.6;
+    pointer-events: none;
+    z-index: 0;
+}
+
+@keyframes float {
+    0% { transform: translate(0, 0); }
+    100% { transform: translate(-150px, 0); }
+}
+
+/* Improved scrollbar styling */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: hsl(var(--surface-bg));
+    border-radius: var(--radius-small);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--gradient-primary);
+    border-radius: var(--radius-small);
+    border: 1px solid hsl(var(--border-muted));
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--gradient-secondary);
+}
+
+/* Glass morphism utility class */
+.glass {
+    background: hsl(var(--surface-bg) / 0.8);
+    backdrop-filter: blur(16px);
+    border: 1px solid hsl(var(--border) / 0.3);
 }
