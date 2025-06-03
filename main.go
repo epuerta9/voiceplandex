@@ -67,11 +67,17 @@ type OpenAIResponse struct {
 // Voice command mappings
 var voiceCommands = map[string]string{
 	"stop":          "\x03",     // Ctrl-C
+	"cancel":        "\x03",     // Ctrl-C alternative
 	"background":    "b",        // b key
 	"apply changes": ":apply\n", // :apply command
 	"apply":         ":apply\n", // short version
 	"quit":          ":quit\n",  // quit command
+	"exit":          ":quit\n",  // exit alternative
 	"help":          ":help\n",  // help command
+	"clear":         "clear\n",  // clear terminal
+	"tell mode":     "tt\n",     // switch to tell mode
+	"multi line":    "mm\n",     // switch to multi-line mode
+	"chat":          "chat\n",   // chat mode
 }
 
 func init() {
@@ -158,10 +164,14 @@ func tokenHandler(w http.ResponseWriter, r *http.Request) {
 
 // PTY WebSocket handler
 func ptyHandler(w http.ResponseWriter, r *http.Request) {
+	log.Printf("PTY WebSocket connection attempt from %s", r.RemoteAddr)
+
 	if err := authenticateWS(r); err != nil {
+		log.Printf("PTY WebSocket authentication failed: %v", err)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
+	log.Printf("PTY WebSocket authentication successful")
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -169,6 +179,7 @@ func ptyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+	log.Printf("PTY WebSocket connection established successfully")
 
 	// Initialize or reuse PTY
 	ptyMutex.Lock()
@@ -216,6 +227,8 @@ func ptyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("Using PTY connection: %v", currentPty != nil)
+
 	// Create a done channel to coordinate cleanup
 	done := make(chan bool, 2)
 
@@ -236,13 +249,18 @@ func ptyHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if messageType == websocket.TextMessage || messageType == websocket.BinaryMessage {
+				log.Printf("PTY WebSocket received data: %q (length: %d)", string(data), len(data))
 				ptyMutex.Lock()
-				if currentPty != nil {
-					if _, err := currentPty.Write(data); err != nil {
+				if ptyConn != nil {
+					log.Printf("Writing to PTY: %q", string(data))
+					if _, err := ptyConn.Write(data); err != nil {
 						log.Printf("PTY write error: %v", err)
 						ptyMutex.Unlock()
 						return
 					}
+					log.Printf("Successfully wrote to PTY")
+				} else {
+					log.Printf("PTY is nil, cannot write data")
 				}
 				ptyMutex.Unlock()
 			}
@@ -285,12 +303,14 @@ func ptyHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if n > 0 {
+				log.Printf("PTY output: %q (length: %d)", string(buf[:n]), n)
 				if err := conn.WriteMessage(websocket.TextMessage, buf[:n]); err != nil {
 					if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 						log.Printf("PTY WebSocket write error: %v", err)
 					}
 					return
 				}
+				log.Printf("Successfully sent PTY output to WebSocket")
 			}
 		}
 	}()
@@ -301,6 +321,8 @@ func ptyHandler(w http.ResponseWriter, r *http.Request) {
 
 // Initialize Plandex PTY
 func initPlandexPTY() error {
+	log.Printf("Initializing Plandex PTY...")
+
 	// Check if plandex is available
 	if _, err := exec.LookPath("plandex"); err != nil {
 		return fmt.Errorf("plandex not found in PATH: %v", err)
@@ -312,9 +334,15 @@ func initPlandexPTY() error {
 		return fmt.Errorf("plandex server not running (run 'plandex server start'): %v", err)
 	}
 
+	log.Printf("Starting Plandex REPL...")
 	// Start Plandex REPL
 	cmd := exec.Command("plandex", "repl")
 	cmd.Env = os.Environ()
+
+	// Add some environment variables that might help
+	cmd.Env = append(cmd.Env, "TERM=xterm-256color")
+	cmd.Env = append(cmd.Env, "COLUMNS=80")
+	cmd.Env = append(cmd.Env, "LINES=24")
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
@@ -330,7 +358,14 @@ func initPlandexPTY() error {
 	ptyCmd = cmd
 	ptyWriter = ptmx
 
-	log.Println("Plandex PTY initialized successfully")
+	log.Printf("Plandex PTY initialized successfully")
+
+	// Send a test command to verify it's working
+	log.Printf("Sending test newline to PTY...")
+	if _, err := ptmx.Write([]byte("\n")); err != nil {
+		log.Printf("Warning: failed to send test command: %v", err)
+	}
+
 	return nil
 }
 
@@ -488,16 +523,9 @@ func sendAudioError(conn *websocket.Conn, message string) {
 func executeVoiceCommand(text string) {
 	log.Printf("Executing voice command: %s", text)
 
-	// Check for special voice keywords first
-	lowerText := strings.ToLower(strings.TrimSpace(text))
-	if keystrokes, exists := voiceCommands[lowerText]; exists {
-		sendToPlandex(keystrokes)
-		return
-	}
-
-	// Otherwise, send as "plandex tell" command
-	command := fmt.Sprintf("tell \"%s\"\n", text)
-	sendToPlandex(command)
+	// Note: Voice command execution is now handled by the frontend JavaScript
+	// This function is kept for logging purposes and potential future server-side processing
+	// The frontend sends commands directly through the PTY WebSocket connection
 }
 
 // Send command to Plandex
@@ -628,6 +656,11 @@ func main() {
 		case strings.HasSuffix(path, ".html"):
 			w.Header().Set("Content-Type", "text/html")
 		}
+
+		// Add cache-busting headers for development
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
 
 		// Serve the file from embedded FS
 		data, err := webFS.ReadFile(path)

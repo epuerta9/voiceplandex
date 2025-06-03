@@ -1,261 +1,219 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="utf-8">
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Voice Plandex - Hands-free AI Coding</title>
-    <meta name="description" content="Control Plandex AI coding agent with your voice. Speak commands, hear responses, code hands-free.">
+    <title>Voice Plandex - Hands-free AI Coding Assistant</title>
+    <link rel="stylesheet" href="/app.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm/css/xterm.css">
-    <link rel="stylesheet" href="style.css">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%' y1='0%' x2='100%' y2='100%'><stop offset='0%' stop-color='%238b5cf6'/><stop offset='100%' stop-color='%23ec4899'/></linearGradient></defs><text y='.9em' font-size='90' fill='url(%23g)'>🎤</text></svg>">
-    
-    <!-- PWA Support -->
-    <link rel="manifest" href="data:application/json,{&quot;name&quot;:&quot;Voice Plandex&quot;,&quot;short_name&quot;:&quot;VoicePlandex&quot;,&quot;description&quot;:&quot;Voice-controlled AI coding assistant&quot;,&quot;start_url&quot;:&quot;/&quot;,&quot;display&quot;:&quot;standalone&quot;,&quot;theme_color&quot;:&quot;#8b5cf6&quot;,&quot;background_color&quot;:&quot;#0a0f1c&quot;}">
-    <meta name="theme-color" content="#8b5cf6">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/xterm@5.3.0/css/xterm.css">
+    <script src="https://unpkg.com/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://unpkg.com/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
 </head>
 <body>
-    <div id="app">
-        <header class="header">
-            <div class="header-left">
-                <h1 class="header-title">
-                    <span class="icon">🎤</span>
-                    <span class="title-text">Voice Plandex</span>
-                    <span class="beta-badge">Beta</span>
-                </h1>
-                <p class="header-subtitle">Hands-free AI coding assistant</p>
-            </div>
-            <div class="header-status">
-                <div class="status-group">
-                    <span id="connection-status" class="status-indicator offline">
-                        <span class="status-dot"></span>
-                        <span class="status-text">Connecting...</span>
-                    </span>
-                    <span id="openai-status" class="status-indicator">
-                        <span class="status-dot"></span>
-                        <span class="status-text">Checking AI...</span>
-                    </span>
-                </div>
-                <button id="help-button" class="help-button" title="Show help">
-                    <span>?</span>
-                </button>
-            </div>
-        </header>
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Initializing Voice Plandex...</div>
+    </div>
 
-        <main class="main-content">
-            <!-- Quick Start Guide -->
-            <div id="quick-start" class="quick-start">
-                <div class="quick-start-content">
-                    <h2>🚀 Quick Start</h2>
-                    <div class="quick-start-steps">
-                        <div class="step">
-                            <span class="step-number">1</span>
-                            <span class="step-text">Click the microphone button below</span>
-                        </div>
-                        <div class="step">
-                            <span class="step-number">2</span>
-                            <span class="step-text">Speak your coding request clearly</span>
-                        </div>
-                        <div class="step">
-                            <span class="step-number">3</span>
-                            <span class="step-text">Watch Plandex work and hear the response</span>
-                        </div>
-                    </div>
-                    <button id="dismiss-quick-start" class="dismiss-button">Got it!</button>
-                </div>
-            </div>
-
-            <div id="terminal-container" class="terminal-container">
-                <div class="terminal-header">
-                    <div class="terminal-title">
-                        <span>Plandex Terminal</span>
-                        <span id="terminal-status" class="terminal-status">Ready</span>
-                    </div>
-                    <div class="terminal-controls">
-                        <button id="clear-terminal" class="terminal-control-btn" title="Clear terminal">
-                            <span>🗑️</span>
-                        </button>
-                        <button id="fullscreen-terminal" class="terminal-control-btn" title="Toggle fullscreen">
-                            <span>⛶</span>
-                        </button>
-                    </div>
-                </div>
-                <div id="terminal"></div>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <div class="brand">
+                <h1 class="brand-title">Voice Plandex</h1>
+                <span class="beta-badge">BETA</span>
+                <span class="brand-subtitle">Hands-free AI coding assistant</span>
             </div>
             
-            <div class="controls-panel">
-                <div class="audio-controls">
-                    <div class="mic-section">
-                        <button id="mic-button" class="mic-button" disabled>
-                            <div class="mic-button-content">
-                                <span class="mic-icon">🎤</span>
-                                <div class="mic-text">
-                                    <span class="mic-primary">Hold to Speak</span>
-                                    <span class="mic-secondary">or press Ctrl+Space</span>
-                                </div>
-                            </div>
-                            <div class="mic-pulse"></div>
-                        </button>
-                        
-                        <div class="recording-indicator" id="recording-indicator">
-                            <span class="recording-dot"></span>
-                            <span class="recording-text">Listening...</span>
-                        </div>
+            <div class="header-controls">
+                <div class="status-indicators">
+                    <div id="connection-status" class="status-indicator offline">
+                        <div class="status-dot"></div>
+                        <span class="status-text">Disconnected</span>
                     </div>
-                    
-                    <div class="voice-commands">
-                        <div class="voice-commands-header">
-                            <span class="voice-commands-label">Quick Voice Commands</span>
-                            <button id="toggle-commands" class="toggle-commands">Hide</button>
-                        </div>
-                        <div class="command-chips" id="command-chips">
-                            <button class="command-chip" data-command="stop">"stop" - Interrupt task</button>
-                            <button class="command-chip" data-command="apply changes">"apply changes" - Apply code</button>
-                            <button class="command-chip" data-command="background">"background" - Background task</button>
-                            <button class="command-chip" data-command="help">"help" - Show help</button>
-                        </div>
+                    <div id="openai-status" class="status-indicator offline">
+                        <div class="status-dot"></div>
+                        <span class="status-text">AI Not Ready</span>
                     </div>
                 </div>
                 
-                <div id="caption-container" class="caption-container">
-                    <div id="caption" class="caption"></div>
+                <div class="header-buttons">
+                    <button id="settings-button" class="icon-button" title="Settings">⚙️</button>
+                    <button id="help-button" class="icon-button" title="Help">❓</button>
                 </div>
             </div>
-        </main>
+        </div>
+    </header>
 
-        <!-- Settings Panel -->
-        <div id="settings-panel" class="settings-panel hidden">
-            <div class="settings-backdrop"></div>
-            <div class="settings-content">
-                <div class="settings-header">
-                    <h3>⚙️ Settings</h3>
-                    <button id="close-settings" class="close-button">×</button>
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Voice Controls (Compact) -->
+        <div class="voice-panel">
+            <div class="voice-controls">
+                <button id="mic-button" class="mic-button-compact" title="Hold to speak (Ctrl+Space)">
+                    🎤
+                </button>
+                <div id="caption" class="caption-compact"></div>
+            </div>
+            
+            <div id="recording-indicator" class="recording-indicator-compact">
+                <div class="pulse"></div>
+                Recording...
+            </div>
+        </div>
+
+        <!-- Terminal Section -->
+        <div class="terminal-section">
+            <div class="terminal-header">
+                <div class="terminal-title">
+                    <span class="terminal-icon">💻</span>
+                    <span>Plandex Terminal</span>
+                    <span id="terminal-status" class="terminal-status">Initializing...</span>
+                </div>
+                <div class="terminal-controls">
+                    <button id="clear-terminal" class="terminal-button" title="Clear">🗑️</button>
+                    <button id="fullscreen-terminal" class="terminal-button" title="Fullscreen">⛶</button>
+                </div>
+            </div>
+            
+            <div id="terminal-container" class="terminal-container">
+                <div id="terminal" class="terminal"></div>
+            </div>
+        </div>
+
+        <!-- Quick Commands -->
+        <div class="quick-commands">
+            <button id="toggle-commands" class="toggle-commands">Quick Commands</button>
+            <div id="command-chips" class="command-chips">
+                <button class="command-chip" data-command="stop">
+                    <span class="chip-icon">⏹️</span>
+                    <span class="chip-text">"stop" - Interrupt task</span>
+                </button>
+                <button class="command-chip" data-command="apply changes">
+                    <span class="chip-icon">✅</span>
+                    <span class="chip-text">"apply changes" - Apply code</span>
+                </button>
+                <button class="command-chip" data-command="background">
+                    <span class="chip-icon">⏸️</span>
+                    <span class="chip-text">"background" - Background task</span>
+                </button>
+                <button class="command-chip" data-command="help">
+                    <span class="chip-icon">❓</span>
+                    <span class="chip-text">"help" - Show help</span>
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <!-- Settings Panel -->
+    <div id="settings-panel" class="panel-backdrop hidden">
+        <div class="panel">
+            <div class="panel-header">
+                <h2>Settings</h2>
+                <button id="close-settings" class="close-button">×</button>
+            </div>
+            <div class="panel-content">
+                <div class="setting-group">
+                    <label class="setting-label">
+                        <input type="checkbox" id="auto-apply" checked>
+                        Auto-execute Voice Commands
+                    </label>
                 </div>
                 
-                <div class="settings-body">
-                    <div class="setting-group">
-                        <label for="tts-enabled">
-                            <span class="setting-title">🔊 Text-to-Speech</span>
-                            <span class="setting-description">Hear Plandex responses read aloud</span>
-                        </label>
-                        <input type="checkbox" id="tts-enabled" class="setting-toggle" checked>
-                    </div>
-                    
-                    <div class="setting-group">
-                        <label for="tts-rate">
-                            <span class="setting-title">🗣️ Speech Speed</span>
-                            <span class="setting-description">Adjust playback speed</span>
-                        </label>
-                        <div class="range-control">
-                            <input type="range" id="tts-rate" min="0.5" max="2" step="0.1" value="1">
-                            <span id="tts-rate-value" class="range-value">1.0x</span>
-                        </div>
-                    </div>
-                    
-                    <div class="setting-group">
-                        <label for="auto-apply">
-                            <span class="setting-title">⚡ Auto-apply Commands</span>
-                            <span class="setting-description">Automatically execute voice commands</span>
-                        </label>
-                        <input type="checkbox" id="auto-apply" class="setting-toggle" checked>
-                    </div>
-
-                    <div class="setting-group">
-                        <label for="mic-sensitivity">
-                            <span class="setting-title">🎤 Microphone Sensitivity</span>
-                            <span class="setting-description">Adjust voice detection threshold</span>
-                        </label>
-                        <div class="range-control">
-                            <input type="range" id="mic-sensitivity" min="0.1" max="1" step="0.1" value="0.5">
-                            <span id="mic-sensitivity-value" class="range-value">0.5</span>
-                        </div>
+                <div class="setting-group">
+                    <label class="setting-label">Microphone Sensitivity</label>
+                    <div class="slider-container">
+                        <input type="range" id="mic-sensitivity" min="0.1" max="1.0" step="0.1" value="0.5">
+                        <span id="mic-sensitivity-value">0.5</span>
                     </div>
                 </div>
                 
-                <div class="settings-footer">
+                <div class="setting-actions">
                     <button id="reset-settings" class="secondary-button">Reset to Defaults</button>
-                    <button id="settings-button" class="primary-button">⚙️ Settings</button>
                 </div>
-            </div>
-        </div>
-
-        <!-- Help Panel -->
-        <div id="help-panel" class="help-panel hidden">
-            <div class="help-backdrop"></div>
-            <div class="help-content">
-                <div class="help-header">
-                    <h3>❓ Help & Guide</h3>
-                    <button id="close-help" class="close-button">×</button>
-                </div>
-                
-                <div class="help-body">
-                    <section class="help-section">
-                        <h4>Getting Started</h4>
-                        <ul>
-                            <li>Make sure your microphone is enabled</li>
-                            <li>Speak clearly and at normal volume</li>
-                            <li>Wait for the "Listening..." indicator</li>
-                            <li>Give specific, clear instructions</li>
-                        </ul>
-                    </section>
-                    
-                    <section class="help-section">
-                        <h4>Voice Commands</h4>
-                        <ul>
-                            <li><strong>"add unit test for login"</strong> - Create tests</li>
-                            <li><strong>"fix the bug in user service"</strong> - Debug code</li>
-                            <li><strong>"refactor the database module"</strong> - Improve code</li>
-                            <li><strong>"stop"</strong> - Interrupt current task</li>
-                            <li><strong>"apply changes"</strong> - Accept proposed changes</li>
-                        </ul>
-                    </section>
-                    
-                    <section class="help-section">
-                        <h4>Keyboard Shortcuts</h4>
-                        <ul>
-                            <li><kbd>Ctrl+Space</kbd> - Start/stop recording</li>
-                            <li><kbd>Ctrl+C</kbd> - Interrupt terminal task</li>
-                            <li><kbd>F11</kbd> - Toggle fullscreen</li>
-                            <li><kbd>?</kbd> - Show this help</li>
-                        </ul>
-                    </section>
-                </div>
-            </div>
-        </div>
-
-        <!-- Error Panel -->
-        <div id="error-panel" class="notification-panel error hidden">
-            <div class="notification-content">
-                <span class="notification-icon">⚠️</span>
-                <span id="error-message" class="notification-message"></span>
-                <button id="close-error" class="notification-close">×</button>
-            </div>
-        </div>
-
-        <!-- Success Panel -->
-        <div id="success-panel" class="notification-panel success hidden">
-            <div class="notification-content">
-                <span class="notification-icon">✅</span>
-                <span id="success-message" class="notification-message"></span>
-                <button id="close-success" class="notification-close">×</button>
-            </div>
-        </div>
-
-        <!-- Loading Overlay -->
-        <div id="loading-overlay" class="loading-overlay">
-            <div class="loading-content">
-                <div class="loading-spinner"></div>
-                <span class="loading-text">Initializing Voice Plandex...</span>
             </div>
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/xterm/lib/xterm.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
-    <script src="app.js"></script>
+    <!-- Help Panel -->
+    <div id="help-panel" class="panel-backdrop hidden">
+        <div class="panel">
+            <div class="panel-header">
+                <h2>Voice Commands Help</h2>
+                <button id="close-help" class="close-button">×</button>
+            </div>
+            <div class="panel-content">
+                <div class="help-section">
+                    <h3>🎙️ Voice Control</h3>
+                    <ul>
+                        <li><strong>Hold mic button</strong> or <kbd>Ctrl+Space</kbd> to speak</li>
+                        <li>Speak clearly and wait for transcription</li>
+                        <li>Commands are automatically executed</li>
+                    </ul>
+                </div>
+                
+                <div class="help-section">
+                    <h3>🤖 AI Modes</h3>
+                    <ul>
+                        <li><strong>Questions:</strong> "What does this code do?", "How do I...?"</li>
+                        <li><strong>Commands:</strong> "Create a function", "Fix the bug"</li>
+                        <li><strong>Direct:</strong> "stop", "apply changes", "help"</li>
+                    </ul>
+                </div>
+                
+                <div class="help-section">
+                    <h3>⌨️ Keyboard Shortcuts</h3>
+                    <ul>
+                        <li><kbd>Ctrl+Space</kbd> - Start/stop voice recording</li>
+                        <li><kbd>F11</kbd> - Toggle terminal fullscreen</li>
+                        <li><kbd>?</kbd> - Show this help</li>
+                    </ul>
+                </div>
+                
+                <div class="help-section">
+                    <h3>🔧 Quick Commands</h3>
+                    <ul>
+                        <li><em>"stop"</em> - Interrupt current task</li>
+                        <li><em>"apply changes"</em> - Apply pending code changes</li>
+                        <li><em>"background"</em> - Move task to background</li>
+                        <li><em>"help"</em> - Show Plandex help</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Start Guide -->
+    <div id="quick-start" class="notification-panel hidden">
+        <div class="notification-content">
+            <h3>🎤 Welcome to Voice Plandex!</h3>
+            <p>Hold the microphone button or press <kbd>Ctrl+Space</kbd> to start voice control.</p>
+            <p>Try saying: <em>"What is this project about?"</em> or <em>"Create a hello world function"</em></p>
+            <button id="dismiss-quick-start" class="primary-button">Got it!</button>
+        </div>
+    </div>
+
+    <!-- Error Panel -->
+    <div id="error-panel" class="notification-panel error hidden">
+        <div class="notification-content">
+            <span class="notification-icon">⚠️</span>
+            <span id="error-message" class="notification-message"></span>
+            <button id="close-error" class="close-button">×</button>
+        </div>
+    </div>
+
+    <!-- Success Panel -->
+    <div id="success-panel" class="notification-panel success hidden">
+        <div class="notification-content">
+            <span class="notification-icon">✅</span>
+            <span id="success-message" class="notification-message"></span>
+            <button id="close-success" class="close-button">×</button>
+        </div>
+    </div>
+
+    <script src="/app.js"></script>
 </body>
 </html>

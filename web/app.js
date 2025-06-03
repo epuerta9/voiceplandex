@@ -10,13 +10,16 @@ class VoicePlandex {
         this.isConnected = false;
         this.isFirstTime = true;
         this.settings = {
-            ttsEnabled: true,
-            ttsRate: 1.0,
             autoApply: true,
             micSensitivity: 0.5
         };
         this.jwtToken = null;
         this.recordingTimeout = null;
+        
+        // Ensure no TTS is happening globally
+        if (typeof speechSynthesis !== 'undefined') {
+            speechSynthesis.cancel();
+        }
         
         this.init();
     }
@@ -24,6 +27,10 @@ class VoicePlandex {
     async init() {
         try {
             this.showLoading(true);
+            
+            // Disable any TTS immediately and continuously
+            this.disableTTS();
+            
             await this.initializeUI();
             await this.setupTerminal();
             await this.loadSettings();
@@ -97,7 +104,14 @@ class VoicePlandex {
             fontFamily: 'JetBrains Mono, SF Mono, Consolas, Liberation Mono, Menlo, monospace',
             rows: 24,
             cols: 80,
-            allowProposedApi: true
+            allowProposedApi: true,
+            convertEol: true,
+            scrollback: 1000,
+            fastScrollModifier: 'alt',
+            rightClickSelectsWord: true,
+            disableStdin: false,
+            screenReaderMode: false,
+            windowsMode: false
         });
 
         this.fitAddon = new FitAddon.FitAddon();
@@ -117,8 +131,29 @@ class VoicePlandex {
         });
 
         this.terminal.onData((data) => {
+            console.log('=== TERMINAL ONDATA TRIGGERED ===');
+            console.log('Terminal data received:', JSON.stringify(data));
+            console.log('Data bytes:', Array.from(new TextEncoder().encode(data)));
+            console.log('PTY WebSocket exists:', !!this.ptyWebSocket);
+            console.log('PTY WebSocket readyState:', this.ptyWebSocket?.readyState);
+            
             if (this.ptyWebSocket && this.ptyWebSocket.readyState === WebSocket.OPEN) {
-                this.ptyWebSocket.send(data);
+                // Filter out terminal capability queries and responses that confuse Plandex
+                if (this.shouldFilterTerminalData(data)) {
+                    console.log('Filtered out terminal capability data:', data);
+                    return;
+                }
+                
+                console.log('Sending terminal input to PTY WebSocket:', JSON.stringify(data));
+                try {
+                    this.ptyWebSocket.send(data);
+                    console.log('✅ Successfully sent data to PTY WebSocket');
+                } catch (error) {
+                    console.error('❌ Error sending data to PTY WebSocket:', error);
+                }
+            } else {
+                console.error('❌ PTY WebSocket not available');
+                console.error('WebSocket state:', this.ptyWebSocket?.readyState);
             }
         });
 
@@ -140,9 +175,6 @@ class VoicePlandex {
     }
 
     applySettings() {
-        document.getElementById('tts-enabled').checked = this.settings.ttsEnabled;
-        document.getElementById('tts-rate').value = this.settings.ttsRate;
-        document.getElementById('tts-rate-value').textContent = this.settings.ttsRate.toFixed(1) + 'x';
         document.getElementById('auto-apply').checked = this.settings.autoApply;
         document.getElementById('mic-sensitivity').value = this.settings.micSensitivity;
         document.getElementById('mic-sensitivity-value').textContent = this.settings.micSensitivity.toFixed(1);
@@ -158,8 +190,6 @@ class VoicePlandex {
 
     resetSettings() {
         this.settings = {
-            ttsEnabled: true,
-            ttsRate: 1.0,
             autoApply: true,
             micSensitivity: 0.5
         };
@@ -219,31 +249,31 @@ class VoicePlandex {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws/pty?token=${this.jwtToken}`;
         
+        console.log('=== PTY WEBSOCKET CONNECTION ===');
+        console.log('Attempting PTY WebSocket connection to:', wsUrl);
+        console.log('JWT Token:', this.jwtToken ? 'Present' : 'Missing');
+        
         this.ptyWebSocket = new WebSocket(wsUrl);
         
         this.ptyWebSocket.onopen = () => {
-            console.log('PTY WebSocket connected');
+            console.log('✅ PTY WebSocket connected successfully');
             this.updateConnectionStatus(true);
             this.updateTerminalStatus('Connected');
-            this.terminal.clear();
-            this.terminal.writeln('\r\n🎤 \x1b[1;35mVoice Plandex\x1b[0m - Hands-free AI coding assistant');
-            this.terminal.writeln('\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
-            this.terminal.writeln('Terminal connected. You can type commands or use voice input.');
-            this.terminal.writeln('Press the microphone button or \x1b[1mCtrl+Space\x1b[0m to start voice recording.');
-            this.terminal.writeln('');
         };
 
         this.ptyWebSocket.onmessage = (event) => {
             const data = event.data;
+            console.log('PTY WebSocket received data:', data);
             this.terminal.write(data);
             
-            if (this.settings.ttsEnabled && data.trim().length > 0) {
-                this.speakText(data, true);
-            }
+            // REMOVED: TTS audio feedback - voice should be input only
+            // if (this.settings.ttsEnabled && data.trim().length > 0) {
+            //     this.speakText(data, true);
+            // }
         };
 
-        this.ptyWebSocket.onclose = () => {
-            console.log('PTY WebSocket disconnected');
+        this.ptyWebSocket.onclose = (event) => {
+            console.log('❌ PTY WebSocket disconnected. Code:', event.code, 'Reason:', event.reason);
             this.updateConnectionStatus(false);
             this.updateTerminalStatus('Disconnected');
             this.showError('Terminal connection lost. Attempting to reconnect...');
@@ -251,7 +281,7 @@ class VoicePlandex {
         };
 
         this.ptyWebSocket.onerror = (error) => {
-            console.error('PTY WebSocket error:', error);
+            console.error('❌ PTY WebSocket error:', error);
             this.showError('Terminal connection error');
         };
     }
@@ -347,18 +377,7 @@ class VoicePlandex {
             this.resetSettings();
         });
 
-        // Settings controls
-        document.getElementById('tts-enabled').addEventListener('change', (e) => {
-            this.settings.ttsEnabled = e.target.checked;
-            this.saveSettings();
-        });
-
-        document.getElementById('tts-rate').addEventListener('input', (e) => {
-            this.settings.ttsRate = parseFloat(e.target.value);
-            document.getElementById('tts-rate-value').textContent = this.settings.ttsRate.toFixed(1) + 'x';
-            this.saveSettings();
-        });
-
+        // Settings controls - REMOVED TTS event listeners
         document.getElementById('auto-apply').addEventListener('change', (e) => {
             this.settings.autoApply = e.target.checked;
             this.saveSettings();
@@ -600,65 +619,195 @@ class VoicePlandex {
     }
 
     executeVoiceCommand(text) {
+        console.log('=== VOICE COMMAND EXECUTION ===');
         console.log('Executing voice command:', text);
+        console.log('PTY WebSocket exists:', !!this.ptyWebSocket);
+        console.log('PTY WebSocket readyState:', this.ptyWebSocket?.readyState);
+        console.log('WebSocket states: CONNECTING=0, OPEN=1, CLOSING=2, CLOSED=3');
         
         const lowerText = text.toLowerCase().trim();
         
         // Check for special voice keywords first
         const voiceCommands = {
             'stop': '\x03',
+            'cancel': '\x03',
             'background': 'b',
             'apply changes': ':apply\n',
             'apply': ':apply\n',
             'quit': ':quit\n',
+            'exit': ':quit\n',
             'help': ':help\n',
-            'clear': 'clear\n'
+            'clear': 'clear\n',
+            'tell mode': 'tt\n',
+            'multi line': 'mm\n',
+            'chat': 'chat\n'
         };
 
         if (voiceCommands[lowerText]) {
-            this.sendToPlandex(voiceCommands[lowerText]);
-            this.showSuccess(`Executed command: "${lowerText}"`);
+            // Send special command directly through PTY WebSocket
+            if (this.ptyWebSocket && this.ptyWebSocket.readyState === WebSocket.OPEN) {
+                console.log('Sending special command to PTY:', voiceCommands[lowerText]);
+                console.log('Command bytes:', Array.from(new TextEncoder().encode(voiceCommands[lowerText])));
+                this.ptyWebSocket.send(voiceCommands[lowerText]);
+                this.showSuccess(`Executed: "${lowerText}"`);
+            } else {
+                console.error('PTY WebSocket not connected. State:', this.ptyWebSocket?.readyState);
+                this.showError('Terminal not connected');
+            }
             return;
         }
 
-        // For longer commands, use "tell" command
-        if (text.length > 5) {
-            const command = `tell "${text}"\n`;
-            this.sendToPlandex(command);
-            this.showSuccess(`Sent to Plandex: "${text}"`);
+        // For longer commands, determine the best approach and send through PTY
+        if (text && text.length > 2) {
+            const isQuestion = lowerText.includes('what') || lowerText.includes('how') || 
+                              lowerText.includes('why') || lowerText.includes('where') ||
+                              lowerText.includes('explain') || lowerText.includes('show me') ||
+                              lowerText.includes('tell me') || lowerText.includes('describe') ||
+                              lowerText.includes('can you') || lowerText.startsWith('who') ||
+                              text.endsWith('?');
+            
+            const isDirectCommand = lowerText.startsWith('create') ||
+                                   lowerText.startsWith('add') ||
+                                   lowerText.startsWith('fix') ||
+                                   lowerText.startsWith('refactor') ||
+                                   lowerText.startsWith('update') ||
+                                   lowerText.startsWith('delete') ||
+                                   lowerText.startsWith('remove') ||
+                                   lowerText.startsWith('implement') ||
+                                   lowerText.startsWith('write');
+
+            if (this.ptyWebSocket && this.ptyWebSocket.readyState === WebSocket.OPEN) {
+                console.log('Determined command type for:', text);
+                console.log('- lowerText:', lowerText);
+                console.log('- isQuestion:', isQuestion);
+                console.log('- isDirectCommand:', isDirectCommand);
+                
+                if (isQuestion) {
+                    // For questions, send chat command and question together
+                    console.log('=== SENDING COMBINED CHAT COMMAND ===');
+                    const combinedCommand = `chat\n${text}\n`;
+                    console.log('Sending combined command:', JSON.stringify(combinedCommand));
+                    console.log('Combined command bytes:', Array.from(new TextEncoder().encode(combinedCommand)));
+                    
+                    try {
+                        this.ptyWebSocket.send(combinedCommand);
+                        console.log('✅ Combined chat command sent successfully');
+                        this.showSuccess(`💬 Question sent: "${text}"`);
+                    } catch (error) {
+                        console.error('❌ Error sending combined chat command:', error);
+                        this.showError('Failed to send question to terminal');
+                    }
+                } else if (isDirectCommand) {
+                    // For direct commands, send tell command and text together
+                    console.log('=== SENDING COMBINED TELL COMMAND ===');
+                    const combinedCommand = `tt\n${text}\n`;
+                    console.log('Sending combined command:', JSON.stringify(combinedCommand));
+                    console.log('Combined command bytes:', Array.from(new TextEncoder().encode(combinedCommand)));
+                    
+                    try {
+                        this.ptyWebSocket.send(combinedCommand);
+                        console.log('✅ Combined tell command sent successfully');
+                        this.showSuccess(`🔨 Command sent: "${text}"`);
+                    } catch (error) {
+                        console.error('❌ Error sending combined tell command:', error);
+                        this.showError('Failed to send command to terminal');
+                    }
+                } else {
+                    // Default to tell mode - send tell command and text together
+                    console.log('=== SENDING COMBINED DEFAULT COMMAND ===');
+                    const combinedCommand = `tt\n${text}\n`;
+                    console.log('Sending combined command:', JSON.stringify(combinedCommand));
+                    console.log('Combined command bytes:', Array.from(new TextEncoder().encode(combinedCommand)));
+                    
+                    try {
+                        this.ptyWebSocket.send(combinedCommand);
+                        console.log('✅ Combined default command sent successfully');
+                        this.showSuccess(`📝 Text sent: "${text}"`);
+                    } catch (error) {
+                        console.error('❌ Error sending combined default command:', error);
+                        this.showError('Failed to send text to terminal');
+                    }
+                }
+                
+                // Add a test to verify connection works
+                console.log('=== TESTING PTY CONNECTION ===');
+                this.testPtyConnection();
+            } else {
+                console.error('PTY WebSocket state:', this.ptyWebSocket?.readyState);
+                console.error('WebSocket ready states: CONNECTING=0, OPEN=1, CLOSING=2, CLOSED=3');
+                this.showError('Terminal not connected. Cannot send command.');
+            }
         } else {
-            this.showError('Command too short. Please speak a complete instruction.');
+            this.showError('Command too short. Please speak a longer instruction.');
+        }
+        
+        console.log('=== END VOICE COMMAND EXECUTION ===');
+    }
+
+    // Add a test function to verify PTY connection
+    testPtyConnection() {
+        if (this.ptyWebSocket && this.ptyWebSocket.readyState === WebSocket.OPEN) {
+            console.log('Testing PTY connection with newline...');
+            this.ptyWebSocket.send('\n');
+            
+            // Also run manual test
+            console.log('Running manual PTY test...');
+            this.testPtyManually();
         }
     }
 
-    sendToPlandex(command) {
+    testPtyManually() {
+        console.log('=== MANUAL PTY TEST ===');
+        console.log('PTY WebSocket exists:', !!this.ptyWebSocket);
+        console.log('PTY WebSocket readyState:', this.ptyWebSocket?.readyState);
+        console.log('WebSocket states: CONNECTING=0, OPEN=1, CLOSING=2, CLOSED=3');
+        
         if (this.ptyWebSocket && this.ptyWebSocket.readyState === WebSocket.OPEN) {
-            this.ptyWebSocket.send(command);
+            console.log('=== SENDING MANUAL TEST COMMAND ===');
+            const testCommand = 'chat\nHello manual test\n';
+            console.log('Sending manual test:', JSON.stringify(testCommand));
+            
+            try {
+                this.ptyWebSocket.send(testCommand);
+                console.log('✅ Manual test command sent successfully');
+                this.showSuccess('Manual test sent');
+            } catch (error) {
+                console.error('❌ Manual test failed:', error);
+                this.showError('Manual test failed: ' + error.message);
+            }
+        } else {
+            console.error('❌ PTY WebSocket not connected for manual test!');
+            console.error('Current state:', this.ptyWebSocket?.readyState);
+            this.showError('PTY WebSocket not connected - state: ' + (this.ptyWebSocket?.readyState || 'null'));
         }
     }
 
     speakText(text, filter = false) {
-        if (!this.settings.ttsEnabled || !window.speechSynthesis) return;
+        // DISABLED: Voice output removed - this is now voice input only
+        // Text-to-speech functionality disabled to prevent audio feedback
+        return;
+        
+        // if (!this.settings.ttsEnabled || !window.speechSynthesis) return;
 
-        // Filter out ANSI escape sequences and control characters
-        if (filter) {
-            text = text.replace(/\x1b\[[0-9;]*m/g, ''); // Remove ANSI colors
-            text = text.replace(/[\x00-\x1F\x7F]/g, ''); // Remove control chars
-            text = text.trim();
+        // // Filter out ANSI escape sequences and control characters
+        // if (filter) {
+        //     text = text.replace(/\x1b\[[0-9;]*m/g, ''); // Remove ANSI colors
+        //     text = text.replace(/[\x00-\x1F\x7F]/g, ''); // Remove control chars
+        //     text = text.trim();
             
-            // Skip very short or repetitive text
-            if (text.length < 5 || /^[^\w\s]*$/.test(text)) return;
-        }
+        //     // Skip very short or repetitive text
+        //     if (text.length < 5 || /^[^\w\s]*$/.test(text)) return;
+        // }
 
-        // Cancel previous speech
-        speechSynthesis.cancel();
+        // // Cancel previous speech
+        // speechSynthesis.cancel();
 
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.rate = this.settings.ttsRate;
-        utterance.volume = 0.8;
-        utterance.pitch = 1.0;
+        // const utterance = new SpeechSynthesisUtterance(text);
+        // utterance.rate = this.settings.ttsRate;
+        // utterance.volume = 0.8;
+        // utterance.pitch = 1.0;
 
-        speechSynthesis.speak(utterance);
+        // speechSynthesis.speak(utterance);
     }
 
     showCaption(text, type = '') {
@@ -761,6 +910,56 @@ class VoicePlandex {
         
         // Resize terminal after fullscreen toggle
         setTimeout(() => this.fitAddon.fit(), 100);
+    }
+
+    // Add method to filter out terminal capability queries
+    shouldFilterTerminalData(data) {
+        // TEMPORARILY DISABLED - Allow all data through to debug
+        return false;
+        
+        // // Filter out common terminal capability queries and responses
+        // const patterns = [
+        //     /^\x1b\]11;.*\x1b\\$/,           // Background color query response
+        //     /^\x1b\[8;\d+R$/,                // Cursor position report
+        //     /^\x1b\].*\x1b\\$/,              // Other OSC sequences
+        //     /^\x1b\[6n$/,                    // Device status report query
+        //     /^\x1b\[\?.*[hl]$/,              // DEC private mode set/reset
+        //     /^\x1b\[.*[ABCDEFGJKST]$/,       // Some cursor movement/control sequences
+        //     /\?\]11;rgb:\d+\/\d+\/\d+\?\\/, // Background color queries (escaped)
+        //     /\?\[8;\d+R/,                    // Cursor position reports (escaped)
+        //     /\x1b\[3D/,                      // Cursor movement sequences
+        //     /\x1b\[J/,                       // Clear sequences
+        // ];
+        
+        // // Also filter if the data contains multiple escape sequences mixed together
+        // const escapeCount = (data.match(/\x1b/g) || []).length;
+        // if (escapeCount > 3) {
+        //     console.log('Filtering data with too many escape sequences:', escapeCount);
+        //     return true;
+        // }
+        
+        // return patterns.some(pattern => pattern.test(data));
+    }
+
+    // Method to completely disable TTS
+    disableTTS() {
+        if (typeof speechSynthesis !== 'undefined') {
+            speechSynthesis.cancel();
+            
+            // Override speechSynthesis.speak to prevent any TTS
+            const originalSpeak = speechSynthesis.speak.bind(speechSynthesis);
+            speechSynthesis.speak = function(utterance) {
+                console.log('TTS blocked - Voice Plandex is voice input only');
+                return;
+            };
+            
+            // Set up interval to continuously cancel any TTS attempts
+            setInterval(() => {
+                if (speechSynthesis.speaking) {
+                    speechSynthesis.cancel();
+                }
+            }, 100);
+        }
     }
 }
 
