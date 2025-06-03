@@ -8,43 +8,72 @@ class VoicePlandex {
         this.audioContext = null;
         this.isRecording = false;
         this.isConnected = false;
+        this.isFirstTime = true;
         this.settings = {
             ttsEnabled: true,
             ttsRate: 1.0,
-            autoApply: true
+            autoApply: true,
+            micSensitivity: 0.5
         };
         this.jwtToken = null;
+        this.recordingTimeout = null;
         
         this.init();
     }
 
     async init() {
-        await this.initializeUI();
-        await this.setupTerminal();
-        await this.loadSettings();
-        await this.checkHealth();
-        await this.getAuthToken();
-        await this.connectWebSockets();
-        this.setupEventListeners();
+        try {
+            this.showLoading(true);
+            await this.initializeUI();
+            await this.setupTerminal();
+            await this.loadSettings();
+            await this.checkHealth();
+            await this.getAuthToken();
+            await this.connectWebSockets();
+            this.setupEventListeners();
+            this.showQuickStart();
+        } catch (error) {
+            console.error('Initialization error:', error);
+            this.showError('Failed to initialize Voice Plandex. Please refresh the page.');
+        } finally {
+            this.showLoading(false);
+        }
     }
 
     async initializeUI() {
-        // Update UI elements
         this.updateConnectionStatus(false);
         this.updateMicButton(false);
-        
-        // Show loading state
-        const caption = document.getElementById('caption');
-        caption.textContent = 'Initializing...';
-        caption.className = 'caption partial';
+        this.updateTerminalStatus('Initializing...');
+    }
+
+    showLoading(show) {
+        const overlay = document.getElementById('loading-overlay');
+        if (show) {
+            overlay.classList.remove('hidden');
+        } else {
+            overlay.classList.add('hidden');
+        }
+    }
+
+    showQuickStart() {
+        if (this.isFirstTime && !localStorage.getItem('voicePlandexQuickStartDismissed')) {
+            const quickStart = document.getElementById('quick-start');
+            quickStart.classList.remove('hidden');
+        }
+    }
+
+    dismissQuickStart() {
+        const quickStart = document.getElementById('quick-start');
+        quickStart.classList.add('hidden');
+        localStorage.setItem('voicePlandexQuickStartDismissed', 'true');
+        this.isFirstTime = false;
     }
 
     async setupTerminal() {
-        // Initialize xterm.js terminal
         this.terminal = new Terminal({
             cursorBlink: true,
             theme: {
-                background: '#0d1117',
+                background: 'transparent',
                 foreground: '#f0f6fc',
                 cursor: '#2f81f7',
                 black: '#484f58',
@@ -65,27 +94,36 @@ class VoicePlandex {
                 brightWhite: '#f0f6fc'
             },
             fontSize: 14,
-            fontFamily: 'SF Mono, Consolas, Liberation Mono, Menlo, monospace',
+            fontFamily: 'JetBrains Mono, SF Mono, Consolas, Liberation Mono, Menlo, monospace',
             rows: 24,
-            cols: 80
+            cols: 80,
+            allowProposedApi: true
         });
 
         this.fitAddon = new FitAddon.FitAddon();
         this.terminal.loadAddon(this.fitAddon);
         
-        this.terminal.open(document.getElementById('terminal'));
+        const terminalElement = document.getElementById('terminal');
+        this.terminal.open(terminalElement);
         this.fitAddon.fit();
 
-        // Handle terminal input
+        // Ensure terminal gets focus and can receive input
+        this.terminal.focus();
+        
+        // Make terminal container focusable
+        terminalElement.setAttribute('tabindex', '0');
+        terminalElement.addEventListener('click', () => {
+            this.terminal.focus();
+        });
+
         this.terminal.onData((data) => {
             if (this.ptyWebSocket && this.ptyWebSocket.readyState === WebSocket.OPEN) {
                 this.ptyWebSocket.send(data);
             }
         });
 
-        // Handle window resize
         window.addEventListener('resize', () => {
-            this.fitAddon.fit();
+            setTimeout(() => this.fitAddon.fit(), 100);
         });
     }
 
@@ -104,8 +142,10 @@ class VoicePlandex {
     applySettings() {
         document.getElementById('tts-enabled').checked = this.settings.ttsEnabled;
         document.getElementById('tts-rate').value = this.settings.ttsRate;
-        document.getElementById('tts-rate-value').textContent = this.settings.ttsRate.toFixed(1);
+        document.getElementById('tts-rate-value').textContent = this.settings.ttsRate.toFixed(1) + 'x';
         document.getElementById('auto-apply').checked = this.settings.autoApply;
+        document.getElementById('mic-sensitivity').value = this.settings.micSensitivity;
+        document.getElementById('mic-sensitivity-value').textContent = this.settings.micSensitivity.toFixed(1);
     }
 
     saveSettings() {
@@ -116,22 +156,39 @@ class VoicePlandex {
         }
     }
 
+    resetSettings() {
+        this.settings = {
+            ttsEnabled: true,
+            ttsRate: 1.0,
+            autoApply: true,
+            micSensitivity: 0.5
+        };
+        this.applySettings();
+        this.saveSettings();
+        this.showSuccess('Settings reset to defaults');
+    }
+
     async checkHealth() {
         try {
             const response = await fetch('/api/health');
             const health = await response.json();
             
             const openaiStatus = document.getElementById('openai-status');
+            const statusText = openaiStatus.querySelector('.status-text');
+            
             if (health.openai_configured) {
-                openaiStatus.textContent = 'OpenAI: Ready';
+                statusText.textContent = 'AI Ready';
                 openaiStatus.className = 'status-indicator online';
             } else {
-                openaiStatus.textContent = 'OpenAI: Not configured';
+                statusText.textContent = 'AI Not Configured';
                 openaiStatus.className = 'status-indicator offline';
+                this.showError('OpenAI API key not configured. Voice features will not work.');
             }
 
             if (!health.plandex_available) {
-                this.showError('Plandex not found in system PATH. Please install Plandex CLI.');
+                this.showError('Plandex CLI not found. Please install Plandex CLI first.');
+            } else if (!health.plandex_server_running) {
+                this.showError('Plandex server not running. Please run: plandex server start');
             }
         } catch (error) {
             console.warn('Health check failed:', error);
@@ -147,12 +204,15 @@ class VoicePlandex {
         } catch (error) {
             console.error('Failed to get auth token:', error);
             this.showError('Authentication failed');
+            throw error;
         }
     }
 
     async connectWebSockets() {
-        await this.connectPtyWebSocket();
-        await this.connectAudioWebSocket();
+        await Promise.all([
+            this.connectPtyWebSocket(),
+            this.connectAudioWebSocket()
+        ]);
     }
 
     async connectPtyWebSocket() {
@@ -164,9 +224,12 @@ class VoicePlandex {
         this.ptyWebSocket.onopen = () => {
             console.log('PTY WebSocket connected');
             this.updateConnectionStatus(true);
+            this.updateTerminalStatus('Connected');
             this.terminal.clear();
-            this.terminal.writeln('Welcome to Voice Plandex!');
+            this.terminal.writeln('\r\n🎤 \x1b[1;35mVoice Plandex\x1b[0m - Hands-free AI coding assistant');
+            this.terminal.writeln('\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
             this.terminal.writeln('Terminal connected. You can type commands or use voice input.');
+            this.terminal.writeln('Press the microphone button or \x1b[1mCtrl+Space\x1b[0m to start voice recording.');
             this.terminal.writeln('');
         };
 
@@ -174,7 +237,6 @@ class VoicePlandex {
             const data = event.data;
             this.terminal.write(data);
             
-            // Text-to-speech for terminal output (filtered)
             if (this.settings.ttsEnabled && data.trim().length > 0) {
                 this.speakText(data, true);
             }
@@ -183,6 +245,7 @@ class VoicePlandex {
         this.ptyWebSocket.onclose = () => {
             console.log('PTY WebSocket disconnected');
             this.updateConnectionStatus(false);
+            this.updateTerminalStatus('Disconnected');
             this.showError('Terminal connection lost. Attempting to reconnect...');
             setTimeout(() => this.connectPtyWebSocket(), 3000);
         };
@@ -202,8 +265,6 @@ class VoicePlandex {
         this.audioWebSocket.onopen = () => {
             console.log('Audio WebSocket connected');
             this.updateMicButton(true);
-            document.getElementById('caption').textContent = 'Ready for voice input';
-            document.getElementById('caption').className = 'caption';
         };
 
         this.audioWebSocket.onmessage = (event) => {
@@ -233,8 +294,6 @@ class VoicePlandex {
         micButton.addEventListener('mousedown', () => this.startRecording());
         micButton.addEventListener('mouseup', () => this.stopRecording());
         micButton.addEventListener('mouseleave', () => this.stopRecording());
-        
-        // Touch events for mobile
         micButton.addEventListener('touchstart', (e) => {
             e.preventDefault();
             this.startRecording();
@@ -244,13 +303,48 @@ class VoicePlandex {
             this.stopRecording();
         });
 
-        // Settings panel
-        document.getElementById('settings-button').addEventListener('click', () => {
-            document.getElementById('settings-panel').classList.remove('hidden');
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.code === 'Space') {
+                e.preventDefault();
+                if (this.isRecording) {
+                    this.stopRecording();
+                } else {
+                    this.startRecording();
+                }
+            }
+            if (e.key === '?' && !e.ctrlKey && !e.altKey) {
+                const activeElement = document.activeElement;
+                if (activeElement.tagName !== 'INPUT' && activeElement.tagName !== 'TEXTAREA') {
+                    this.showHelp();
+                }
+            }
+            if (e.key === 'F11') {
+                e.preventDefault();
+                this.toggleFullscreen();
+            }
         });
 
+        document.addEventListener('keyup', (e) => {
+            if (e.ctrlKey && e.code === 'Space') {
+                e.preventDefault();
+            }
+        });
+
+        // Quick start dismissal
+        document.getElementById('dismiss-quick-start').addEventListener('click', () => {
+            this.dismissQuickStart();
+        });
+
+        // Settings
+        document.getElementById('settings-button').addEventListener('click', () => {
+            this.showSettings();
+        });
         document.getElementById('close-settings').addEventListener('click', () => {
-            document.getElementById('settings-panel').classList.add('hidden');
+            this.hideSettings();
+        });
+        document.getElementById('reset-settings').addEventListener('click', () => {
+            this.resetSettings();
         });
 
         // Settings controls
@@ -261,7 +355,7 @@ class VoicePlandex {
 
         document.getElementById('tts-rate').addEventListener('input', (e) => {
             this.settings.ttsRate = parseFloat(e.target.value);
-            document.getElementById('tts-rate-value').textContent = this.settings.ttsRate.toFixed(1);
+            document.getElementById('tts-rate-value').textContent = this.settings.ttsRate.toFixed(1) + 'x';
             this.saveSettings();
         });
 
@@ -270,20 +364,65 @@ class VoicePlandex {
             this.saveSettings();
         });
 
-        // Error panel
-        document.getElementById('close-error').addEventListener('click', () => {
-            document.getElementById('error-panel').classList.add('hidden');
+        document.getElementById('mic-sensitivity').addEventListener('input', (e) => {
+            this.settings.micSensitivity = parseFloat(e.target.value);
+            document.getElementById('mic-sensitivity-value').textContent = this.settings.micSensitivity.toFixed(1);
+            this.saveSettings();
         });
 
-        // Keyboard shortcuts
-        document.addEventListener('keydown', (e) => {
-            if (e.ctrlKey && e.key === ' ') {
-                e.preventDefault();
-                if (this.isRecording) {
-                    this.stopRecording();
-                } else {
-                    this.startRecording();
-                }
+        // Help
+        document.getElementById('help-button').addEventListener('click', () => {
+            this.showHelp();
+        });
+        document.getElementById('close-help').addEventListener('click', () => {
+            this.hideHelp();
+        });
+
+        // Terminal controls
+        document.getElementById('clear-terminal').addEventListener('click', () => {
+            this.terminal.clear();
+        });
+        document.getElementById('fullscreen-terminal').addEventListener('click', () => {
+            this.toggleFullscreen();
+        });
+
+        // Command chips
+        document.querySelectorAll('.command-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                const command = chip.dataset.command;
+                this.executeVoiceCommand(command);
+                this.showCaption(`Executed: "${command}"`, 'final');
+            });
+        });
+
+        // Toggle command visibility
+        document.getElementById('toggle-commands').addEventListener('click', (e) => {
+            const chips = document.getElementById('command-chips');
+            const button = e.target;
+            if (chips.classList.contains('hidden')) {
+                chips.classList.remove('hidden');
+                button.textContent = 'Hide';
+            } else {
+                chips.classList.add('hidden');
+                button.textContent = 'Show';
+            }
+        });
+
+        // Notification dismissals
+        document.getElementById('close-error').addEventListener('click', () => {
+            this.hideError();
+        });
+        document.getElementById('close-success').addEventListener('click', () => {
+            this.hideSuccess();
+        });
+
+        // Click outside to close panels
+        document.addEventListener('click', (e) => {
+            if (e.target.classList.contains('settings-backdrop')) {
+                this.hideSettings();
+            }
+            if (e.target.classList.contains('help-backdrop')) {
+                this.hideHelp();
             }
         });
     }
@@ -299,37 +438,75 @@ class VoicePlandex {
                     sampleRate: 16000,
                     channelCount: 1,
                     echoCancellation: true,
-                    noiseSuppression: true
+                    noiseSuppression: true,
+                    autoGainControl: true
                 } 
             });
 
-            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 16000
-            });
-
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
             const source = this.audioContext.createMediaStreamSource(stream);
             const processor = this.audioContext.createScriptProcessor(4096, 1, 1);
 
+            // Accumulate audio data instead of sending fragments
+            this.audioBuffer = [];
+            this.audioDataCount = 0;
+            this.silenceCount = 0;
+            this.speechDetected = false;
+
             processor.onaudioprocess = (event) => {
-                if (this.isRecording && this.audioWebSocket.readyState === WebSocket.OPEN) {
+                if (this.isRecording) {
                     const inputData = event.inputBuffer.getChannelData(0);
-                    const pcmData = this.float32ToPCM16(inputData);
-                    this.audioWebSocket.send(pcmData);
+                    
+                    // Simple voice activity detection
+                    let sum = 0;
+                    for (let i = 0; i < inputData.length; i++) {
+                        sum += inputData[i] * inputData[i];
+                    }
+                    const rms = Math.sqrt(sum / inputData.length);
+                    const volume = Math.max(0, Math.min(1, rms * 10));
+
+                    // Detect speech vs silence
+                    if (volume > this.settings.micSensitivity) {
+                        this.speechDetected = true;
+                        this.silenceCount = 0;
+                        
+                        const pcmData = this.float32ToPCM16(inputData);
+                        this.audioBuffer.push(new Uint8Array(pcmData));
+                        this.audioDataCount += pcmData.byteLength;
+                    } else if (this.speechDetected) {
+                        this.silenceCount++;
+                        
+                        // If we have speech and then 0.5 seconds of silence, stop
+                        if (this.silenceCount > 24) { // ~0.5 seconds at 48kHz
+                            this.stopRecording();
+                            return;
+                        }
+                        
+                        // Still accumulate some silence after speech
+                        const pcmData = this.float32ToPCM16(inputData);
+                        this.audioBuffer.push(new Uint8Array(pcmData));
+                        this.audioDataCount += pcmData.byteLength;
+                    }
                 }
             };
 
             source.connect(processor);
             processor.connect(this.audioContext.destination);
 
+            this.mediaProcessor = processor;
+            this.mediaStream = stream;
             this.isRecording = true;
             this.updateMicButtonState();
-            
-            document.getElementById('caption').textContent = 'Listening...';
-            document.getElementById('caption').className = 'caption partial';
+            this.showCaption('Listening...', 'partial');
+
+            // Auto-stop after 10 seconds and send accumulated audio
+            this.recordingTimeout = setTimeout(() => {
+                this.stopRecording();
+            }, 10000);
 
         } catch (error) {
             console.error('Failed to start recording:', error);
-            this.showError('Microphone access denied or not available');
+            this.showError('Microphone access denied. Please enable microphone permissions.');
         }
     }
 
@@ -337,133 +514,259 @@ class VoicePlandex {
         if (!this.isRecording) return;
 
         this.isRecording = false;
-        this.updateMicButtonState();
+        
+        if (this.recordingTimeout) {
+            clearTimeout(this.recordingTimeout);
+            this.recordingTimeout = null;
+        }
+
+        // Send accumulated audio data
+        if (this.audioBuffer && this.audioBuffer.length > 0 && this.audioDataCount > 8192) { // Minimum 8KB
+            const combinedBuffer = new Uint8Array(this.audioDataCount);
+            let offset = 0;
+            
+            for (const chunk of this.audioBuffer) {
+                combinedBuffer.set(chunk, offset);
+                offset += chunk.length;
+            }
+
+            if (this.audioWebSocket && this.audioWebSocket.readyState === WebSocket.OPEN) {
+                this.audioWebSocket.send(combinedBuffer);
+            }
+        }
+
+        // Cleanup
+        this.audioBuffer = [];
+        this.audioDataCount = 0;
+
+        if (this.mediaProcessor) {
+            this.mediaProcessor.disconnect();
+            this.mediaProcessor = null;
+        }
+
+        if (this.mediaStream) {
+            this.mediaStream.getTracks().forEach(track => track.stop());
+            this.mediaStream = null;
+        }
 
         if (this.audioContext) {
             this.audioContext.close();
             this.audioContext = null;
         }
 
-        document.getElementById('caption').textContent = 'Processing...';
-        document.getElementById('caption').className = 'caption partial';
+        this.updateMicButtonState();
+        this.showCaption('Processing...', 'partial');
     }
 
     float32ToPCM16(input) {
         const output = new Int16Array(input.length);
         for (let i = 0; i < input.length; i++) {
-            let sample = Math.max(-1, Math.min(1, input[i]));
-            output[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+            const sample = Math.max(-1, Math.min(1, input[i]));
+            output[i] = sample * 0x7FFF;
         }
         return output.buffer;
     }
 
     handleTranscription(response) {
-        const caption = document.getElementById('caption');
-        
-        if (response.is_final) {
-            caption.textContent = response.text || 'No speech detected';
-            caption.className = 'caption final';
+        if (response.type === 'error') {
+            this.showError('Speech recognition failed. Please try again.');
+            this.showCaption('', '');
+            return;
+        }
+
+        if (response.type === 'partial') {
+            this.showCaption(response.text || 'Listening...', 'partial');
+        } else if (response.type === 'final' && response.text) {
+            const text = response.text.trim();
             
-            if (response.text && this.settings.ttsEnabled) {
-                this.speakText(`Command: ${response.text}`);
+            // Filter out very short or meaningless transcriptions
+            if (text.length < 3 || /^(you|uh|um|ah|the|a|and|or|but)$/i.test(text)) {
+                this.showCaption('Speech too short, please try again', 'error');
+                setTimeout(() => {
+                    this.showCaption('', '');
+                }, 2000);
+                return;
             }
+
+            this.showCaption(`"${text}"`, 'final');
             
-            // Clear caption after a delay
-            setTimeout(() => {
-                caption.textContent = 'Ready for voice input';
-                caption.className = 'caption';
-            }, 3000);
+            if (this.settings.autoApply) {
+                this.executeVoiceCommand(text);
+            } else {
+                // Show execute button if auto-apply is disabled
+                this.showCaption(`"${text}" - Click to execute`, 'final');
+            }
+        }
+    }
+
+    executeVoiceCommand(text) {
+        console.log('Executing voice command:', text);
+        
+        const lowerText = text.toLowerCase().trim();
+        
+        // Check for special voice keywords first
+        const voiceCommands = {
+            'stop': '\x03',
+            'background': 'b',
+            'apply changes': ':apply\n',
+            'apply': ':apply\n',
+            'quit': ':quit\n',
+            'help': ':help\n',
+            'clear': 'clear\n'
+        };
+
+        if (voiceCommands[lowerText]) {
+            this.sendToPlandex(voiceCommands[lowerText]);
+            this.showSuccess(`Executed command: "${lowerText}"`);
+            return;
+        }
+
+        // For longer commands, use "tell" command
+        if (text.length > 5) {
+            const command = `tell "${text}"\n`;
+            this.sendToPlandex(command);
+            this.showSuccess(`Sent to Plandex: "${text}"`);
         } else {
-            caption.textContent = response.text || 'Listening...';
-            caption.className = 'caption partial';
+            this.showError('Command too short. Please speak a complete instruction.');
+        }
+    }
+
+    sendToPlandex(command) {
+        if (this.ptyWebSocket && this.ptyWebSocket.readyState === WebSocket.OPEN) {
+            this.ptyWebSocket.send(command);
         }
     }
 
     speakText(text, filter = false) {
         if (!this.settings.ttsEnabled || !window.speechSynthesis) return;
 
-        // Filter out terminal control sequences and noise
+        // Filter out ANSI escape sequences and control characters
         if (filter) {
-            // Skip very short outputs, control sequences, prompts
-            if (text.length < 5 || text.includes('\x1b') || text.match(/^\s*[\$#>]\s*$/)) {
-                return;
-            }
+            text = text.replace(/\x1b\[[0-9;]*m/g, ''); // Remove ANSI colors
+            text = text.replace(/[\x00-\x1F\x7F]/g, ''); // Remove control chars
+            text = text.trim();
+            
+            // Skip very short or repetitive text
+            if (text.length < 5 || /^[^\w\s]*$/.test(text)) return;
         }
+
+        // Cancel previous speech
+        speechSynthesis.cancel();
 
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.rate = this.settings.ttsRate;
-        utterance.volume = 0.7;
-        
-        // Use a more natural voice if available
-        const voices = speechSynthesis.getVoices();
-        const preferredVoice = voices.find(voice => 
-            voice.lang.startsWith('en') && !voice.name.includes('Google')
-        );
-        if (preferredVoice) {
-            utterance.voice = preferredVoice;
-        }
+        utterance.volume = 0.8;
+        utterance.pitch = 1.0;
 
         speechSynthesis.speak(utterance);
     }
 
+    showCaption(text, type = '') {
+        const caption = document.getElementById('caption');
+        caption.textContent = text;
+        caption.className = `caption ${type}`;
+        
+        if (type === 'final') {
+            setTimeout(() => {
+                caption.textContent = '';
+                caption.className = 'caption';
+            }, 3000);
+        }
+    }
+
     updateConnectionStatus(connected) {
-        this.isConnected = connected;
         const status = document.getElementById('connection-status');
+        const statusText = status.querySelector('.status-text');
+        
+        this.isConnected = connected;
         if (connected) {
-            status.textContent = 'Connected';
+            statusText.textContent = 'Connected';
             status.className = 'status-indicator online';
         } else {
-            status.textContent = 'Disconnected';
+            statusText.textContent = 'Disconnected';
             status.className = 'status-indicator offline';
         }
+    }
+
+    updateTerminalStatus(status) {
+        const terminalStatus = document.getElementById('terminal-status');
+        terminalStatus.textContent = status;
     }
 
     updateMicButton(enabled) {
         const micButton = document.getElementById('mic-button');
         micButton.disabled = !enabled;
-        if (!enabled) {
-            micButton.innerHTML = '<span class="mic-icon">🎤</span><span class="mic-text">Connecting...</span>';
-        } else {
-            micButton.innerHTML = '<span class="mic-icon">🎤</span><span class="mic-text">Hold to Speak</span>';
-        }
     }
 
     updateMicButtonState() {
         const micButton = document.getElementById('mic-button');
+        const recordingIndicator = document.getElementById('recording-indicator');
+        
         if (this.isRecording) {
-            micButton.className = 'mic-button recording';
-            micButton.innerHTML = '<span class="mic-icon">⏹️</span><span class="mic-text">Recording...</span>';
+            micButton.classList.add('recording');
+            recordingIndicator.classList.add('active');
         } else {
-            micButton.className = 'mic-button';
-            micButton.innerHTML = '<span class="mic-icon">🎤</span><span class="mic-text">Hold to Speak</span>';
+            micButton.classList.remove('recording');
+            recordingIndicator.classList.remove('active');
         }
+    }
+
+    showSettings() {
+        document.getElementById('settings-panel').classList.remove('hidden');
+    }
+
+    hideSettings() {
+        document.getElementById('settings-panel').classList.add('hidden');
+    }
+
+    showHelp() {
+        document.getElementById('help-panel').classList.remove('hidden');
+    }
+
+    hideHelp() {
+        document.getElementById('help-panel').classList.add('hidden');
     }
 
     showError(message) {
-        const errorPanel = document.getElementById('error-panel');
-        const errorMessage = document.getElementById('error-message');
-        
-        errorMessage.textContent = message;
-        errorPanel.classList.remove('hidden');
+        const panel = document.getElementById('error-panel');
+        const messageEl = document.getElementById('error-message');
+        messageEl.textContent = message;
+        panel.classList.remove('hidden');
         
         // Auto-hide after 5 seconds
-        setTimeout(() => {
-            errorPanel.classList.add('hidden');
-        }, 5000);
+        setTimeout(() => this.hideError(), 5000);
+    }
+
+    hideError() {
+        document.getElementById('error-panel').classList.add('hidden');
+    }
+
+    showSuccess(message) {
+        const panel = document.getElementById('success-panel');
+        const messageEl = document.getElementById('success-message');
+        messageEl.textContent = message;
+        panel.classList.remove('hidden');
+        
+        // Auto-hide after 3 seconds
+        setTimeout(() => this.hideSuccess(), 3000);
+    }
+
+    hideSuccess() {
+        document.getElementById('success-panel').classList.add('hidden');
+    }
+
+    toggleFullscreen() {
+        const terminalContainer = document.getElementById('terminal-container');
+        terminalContainer.classList.toggle('fullscreen');
+        
+        // Resize terminal after fullscreen toggle
+        setTimeout(() => this.fitAddon.fit(), 100);
     }
 }
 
-// Initialize the application
+// Initialize the application when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
-    new VoicePlandex();
+    window.voicePlandex = new VoicePlandex();
 });
 
-// Handle page visibility changes
-document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-        // Stop speech synthesis when tab is hidden
-        if (window.speechSynthesis) {
-            speechSynthesis.cancel();
-        }
-    }
-});
+// Note: Service worker registration removed since we don't have sw.js file
